@@ -1,6 +1,18 @@
 import {parser} from "lezer-python";
 import {TreeCursor} from "lezer-tree";
-import {Expr, Stmt} from "./ast";
+import { BinOp, Expr, Stmt } from "./ast";
+import { stringifyTree } from "./treeprint";
+
+export function traverseArgs(c: TreeCursor, s: string): Array<Expr> {
+  var args: Array<Expr> = [];
+  c.firstChild(); // go into arglist
+  while (c.nextSibling()) {
+    args.push(traverseExpr(c, s));
+    c.nextSibling();
+  }
+  c.parent(); // pop arglist
+  return args;
+}
 
 export function traverseExpr(c : TreeCursor, s : string) : Expr {
   switch(c.type.name) {
@@ -17,18 +29,62 @@ export function traverseExpr(c : TreeCursor, s : string) : Expr {
     case "CallExpression":
       c.firstChild();
       const callName = s.substring(c.from, c.to);
-      c.nextSibling(); // go to arglist
-      c.firstChild(); // go into arglist
-      c.nextSibling(); // find single argument in arglist
-      const arg = traverseExpr(c, s);
-      c.parent(); // pop arglist
-      c.parent(); // pop CallExpression
-      return {
-        tag: "builtin1",
-        name: callName,
-        arg: arg
-      };
-
+      c.nextSibling();
+      var args = traverseArgs(c, s);
+      if (args.length == 1) {
+        if (callName !== "abs" && callName !== "print")
+          throw new Error("Unknown builtin1");
+        c.parent(); // pop CallExpression
+        return {
+          tag: "builtin1",
+          name: callName,
+          arg: args[0]
+        };
+      } else if (args.length == 2) {
+        if (callName !== "max" && callName !== "min" && callName !== "pow")
+          throw new Error("Unknown builtin2");
+        c.parent(); // pop CallExpression
+        return {
+          tag: "builtin2",
+          name: callName,
+          arg1: args[0],
+          arg2: args[1]
+        };
+      }
+      throw new Error("Function call with incorrect args");
+    case "UnaryExpression":
+      c.firstChild();
+      const uniOp = s.substring(c.from, c.to);
+      if (uniOp !== "-" && uniOp !== "+")
+        throw new Error("Unsupported unary operator");
+      c.nextSibling();
+      const num = Number(uniOp + s.substring(c.from, c.to));
+      if (isNaN(num))
+        throw new Error("Unary operation failed");
+      c.parent();
+      return { tag: "num", value: num };
+    case "BinaryExpression":
+      c.firstChild();
+      const left = traverseExpr(c, s);
+      c.nextSibling();
+      var binOp: BinOp;
+      switch(s.substring(c.from, c.to)) {
+        case "+":
+          binOp = BinOp.Plus;
+          break;
+        case "-":
+          binOp = BinOp.Minus;
+          break;
+        case "*":
+          binOp = BinOp.Mul;
+          break;
+        default:
+          throw new Error("Could not parse expr at " + c.from + " " + c.to + ": " + s.substring(c.from, c.to));
+      }
+      c.nextSibling();
+      const right = traverseExpr(c, s);
+      c.parent();
+      return { tag: "binexpr", op: binOp, left: left, right: right };
     default:
       throw new Error("Could not parse expr at " + c.from + " " + c.to + ": " + s.substring(c.from, c.to));
   }
@@ -74,5 +130,6 @@ export function traverse(c : TreeCursor, s : string) : Array<Stmt> {
 }
 export function parse(source : string) : Array<Stmt> {
   const t = parser.parse(source);
+  console.log(stringifyTree(t.cursor(), source, 0))
   return traverse(t.cursor(), source);
 }
